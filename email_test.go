@@ -1,6 +1,7 @@
 package email
 
 import (
+	"fmt"
 	"testing"
 
 	"bytes"
@@ -400,6 +401,103 @@ d-printable decoding.</div>
 		}
 		if e.From != ex.From {
 			t.Fatalf("Incorrect \"From\": %#q != %#q", e.From, ex.From)
+		}
+	}
+}
+
+func TestBase64EmailWithAttachmentFromReader(t *testing.T) {
+	ex := &Email{
+		Subject: "Test Subject",
+		To:      []string{"Jordan Wright <jmwright798@gmail.com>"},
+		From:    "Jordan Wright <jmwright798@gmail.com>",
+		Text:    []byte("This is a test email with HTML Formatting. It also has very long lines so that the content must be wrapped if using quoted-printable decoding."),
+		HTML:    []byte("<div dir=\"ltr\">This is a test email with <b>HTML Formatting.</b>\u00a0It also has very long lines so that the content must be wrapped if using quoted-printable decoding.</div>\n"),
+		Attachments: []*Attachment{
+			{
+				Filename: "001M.jpg",
+				Header:   textproto.MIMEHeader{
+					"Content-Disposition":[]string{`attachment; filename="001M.jpg"`},
+					"Content-Transfer-Encoding":[]string{`base64`},
+					"Content-Type":[]string{`binary/octet-stream; name="001M.jpg"`},
+				},
+				Content:  []byte(`hello123123`),
+			},
+			{
+				Filename: "002.jpg",
+				Header:   textproto.MIMEHeader{
+					"Content-Disposition":[]string{`attachment; filename="002.jpg"; something_else="123"`},
+					"Content-Transfer-Encoding":[]string{`BASE64`},
+					"Content-Type":[]string{`binary/octet-stream; name="002.jpg"`},
+				},
+				Content:  []byte(`yoooooo`),
+			},
+		},
+	}
+	rawMail := []byte(`
+		MIME-Version: 1.0
+Subject: Test Subject
+From: Jordan Wright <jmwright798@gmail.com>
+To: Jordan Wright <jmwright798@gmail.com>
+Content-Type: multipart/alternative; boundary=001a114fb3fc42fd6b051f834280
+
+--001a114fb3fc42fd6b051f834280
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyBhIHRlc3QgZW1haWwgd2l0aCBIVE1MIEZvcm1hdHRpbmcuIEl0IGFsc28gaGFzIHZl
+cnkgbG9uZyBsaW5lcyBzbyB0aGF0IHRoZSBjb250ZW50IG11c3QgYmUgd3JhcHBlZCBpZiB1c2lu
+ZyBxdW90ZWQtcHJpbnRhYmxlIGRlY29kaW5nLg==
+
+--001a114fb3fc42fd6b051f834280
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr">This is a test email with <b>HTML Formatting.</b>=C2=A0It =
+also has very long lines so that the content must be wrapped if using quote=
+d-printable decoding.</div>
+
+--001a114fb3fc42fd6b051f834280
+Content-Type: binary/octet-stream; name="001M.jpg"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="001M.jpg"
+
+aGVsbG8xMjMxMjM=
+
+--001a114fb3fc42fd6b051f834280
+Content-Type: binary/octet-stream; name="002.jpg"
+Content-Transfer-Encoding: BASE64
+Content-Disposition: attachment; filename="002.jpg"; something_else="123"
+
+eW9vb29vbw==
+
+--001a114fb3fc42fd6b051f834280--`)
+
+	e, err := NewEmailFromReader(bytes.NewReader(rawMail))
+	if err != nil {
+		t.Fatalf("Error creating email %s", err.Error())
+	}
+	if e.Subject != ex.Subject {
+		t.Fatalf("Incorrect subject. %#q != %#q", e.Subject, ex.Subject)
+	}
+	if !bytes.Equal(e.Text, ex.Text) {
+		t.Fatalf("Incorrect text: %#q != %#q", e.Text, ex.Text)
+	}
+	if !bytes.Equal(e.HTML, ex.HTML) {
+		t.Fatalf("Incorrect HTML: %#q != %#q", e.HTML, ex.HTML)
+	}
+	if e.From != ex.From {
+		t.Fatalf("Incorrect \"From\": %#q != %#q", e.From, ex.From)
+	}
+	for i, ax := range ex.Attachments {
+		a := e.Attachments[i]
+
+		for k, v := range ax.Header {
+			if fmt.Sprint(a.Header[k]) != fmt.Sprint(v) {
+				t.Fatalf("Incorrect attachment header \"%s\": %v != %v", k, a.Header[k], v)
+			}
+		}
+		if fmt.Sprint(a.Content)!= fmt.Sprint(ax.Content) {
+			t.Fatalf("Incorrect attachment content: %v != %v", a.Header, ax.Header)
 		}
 	}
 }
