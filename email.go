@@ -21,6 +21,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -126,6 +127,12 @@ func NewEmailFromReader(r io.Reader) (*Email, error) {
 			return e, err
 		}
 		switch {
+		case strings.Contains(p.header.Get("Content-Disposition"), "attachment"):
+			attachment, err := parseAttachment(p)
+			if err != nil {
+				return e, err
+			}
+			e.Attachments = append(e.Attachments, attachment)
 		case ct == "text/plain":
 			e.Text = p.body
 		case ct == "text/html":
@@ -133,6 +140,22 @@ func NewEmailFromReader(r io.Reader) (*Email, error) {
 		}
 	}
 	return e, nil
+}
+
+// parseAttachment constructs an Attachment object from the given parsed part object
+func parseAttachment(part *part) (*Attachment, error) {
+	attachment := &Attachment{
+		Header: part.header,
+		Content: part.body,
+	}
+	// parse filename out from the Content-Disposition header, if available
+	matches := regexp.MustCompile(`filename=\"?([^\"]+)\"`).FindAllStringSubmatch(
+		part.header.Get("Content-Disposition"), 1,
+		)
+	if len(matches) > 0 {
+		attachment.Filename = matches[0][1]
+	}
+	return attachment, nil
 }
 
 // parseMIMEParts will recursively walk a MIME entity and return a []mime.Part containing
