@@ -263,7 +263,31 @@ func (p *Pool) failedToGet(startTime time.Time) error {
 // be <0 to indicate no timeout. Otherwise reaching the timeout will produce
 // and error building a connection that occurred while we were waiting, or
 // otherwise ErrTimeout.
-func (p *Pool) Send(e *Email, timeout time.Duration) (err error) {
+func (p *Pool) Send(e *Email, timeout time.Duration) error {
+	recipients, err := addressLists(e.To, e.Cc, e.Bcc)
+	if err != nil {
+		return err
+	}
+
+	msg, err := e.Bytes()
+	if err != nil {
+		return err
+	}
+
+	from, err := emailOnly(e.From)
+	if err != nil {
+		return err
+	}
+
+	return p.SendRawMsg(from, recipients, msg, timeout)
+}
+
+// SendRawMsg sends an email via a connection pulled from the Pool. Given from, recipients, and
+// raw SMTP mail payload. Note that the from and recipients should be bare email addresses.
+// The timeout may be <0 to indicate no timeout. Otherwise reaching the timeout will
+// produce an error building a connection that occurred while we were waiting, or
+// otherwise ErrTimeout.
+func (p *Pool) SendRawMsg(from string, recipients []string, msg []byte, timeout time.Duration) (err error) {
 	start := time.Now()
 	c := p.get(timeout)
 	if c == nil {
@@ -274,20 +298,6 @@ func (p *Pool) Send(e *Email, timeout time.Duration) (err error) {
 		p.maybeReplace(err, c)
 	}()
 
-	recipients, err := addressLists(e.To, e.Cc, e.Bcc)
-	if err != nil {
-		return
-	}
-
-	msg, err := e.Bytes()
-	if err != nil {
-		return
-	}
-
-	from, err := emailOnly(e.From)
-	if err != nil {
-		return
-	}
 	if err = c.Mail(from); err != nil {
 		return
 	}
@@ -302,6 +312,7 @@ func (p *Pool) Send(e *Email, timeout time.Duration) (err error) {
 	if err != nil {
 		return
 	}
+
 	if _, err = w.Write(msg); err != nil {
 		return
 	}
