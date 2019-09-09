@@ -122,7 +122,7 @@ QUIT
 
 func TestPool_Sureview(t *testing.T) {
 	// https://testmydevice.sureviewsystems.com/Alarms?ID=490
-	poolSize := 2
+	poolSize := 10
 	auth := unencryptedAuth{
 		smtp.PlainAuth("", "", "", "70.35.203.226"),
 	}

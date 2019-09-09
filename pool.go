@@ -63,9 +63,15 @@ func NewPool(logger zerolog.Logger, address string, count int, auth smtp.Auth, o
 	}
 
 	// create clients at the beginning
-	for i:=0; i< count; i++ {
-		pool.makeOne(buildConnectionTimeout)
+	var wg sync.WaitGroup
+	for i:=0; i< count/2; i++ {
+		wg.Add(1)
+		go func(wg *sync.WaitGroup) {
+			pool.makeOne(buildConnectionTimeout)
+			wg.Done()
+		}(&wg)
 	}
+	wg.Wait()
 
 	if len(opt_tlsConfig) == 1 {
 		pool.tlsConfig = opt_tlsConfig[0]
