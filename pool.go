@@ -8,12 +8,17 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
+// Pool is used to maintain SMTP connection pool
 type Pool struct {
+	logger       zerolog.Logger
 	addr         string
 	auth         smtp.Auth
 	max          int
@@ -26,6 +31,7 @@ type Pool struct {
 	tlsConfig    *tls.Config
 }
 
+// client wraps built-in SMTP client and records failtCount while using the connection pool
 type client struct {
 	*smtp.Client
 	failCount int
@@ -37,14 +43,16 @@ type timestampedErr struct {
 }
 
 const maxFails = 4
+const buildConnectionTimeout = 5 * time.Second
 
 var (
 	ErrClosed  = errors.New("pool closed")
 	ErrTimeout = errors.New("timed out")
 )
 
-func NewPool(address string, count int, auth smtp.Auth, opt_tlsConfig ...*tls.Config) (pool *Pool, err error) {
+func NewPool(logger zerolog.Logger, address string, count int, auth smtp.Auth, opt_tlsConfig ...*tls.Config) (pool *Pool, err error) {
 	pool = &Pool{
+		logger: logger,
 		addr:    address,
 		auth:    auth,
 		max:     count,
@@ -53,6 +61,18 @@ func NewPool(address string, count int, auth smtp.Auth, opt_tlsConfig ...*tls.Co
 		closing: make(chan struct{}),
 		mut:     &sync.Mutex{},
 	}
+
+	// create clients at the beginning
+	var wg sync.WaitGroup
+	for i:=0; i< count/2; i++ {
+		wg.Add(1)
+		go func(wg *sync.WaitGroup) {
+			pool.makeOne(buildConnectionTimeout)
+			wg.Done()
+		}(&wg)
+	}
+	wg.Wait()
+
 	if len(opt_tlsConfig) == 1 {
 		pool.tlsConfig = opt_tlsConfig[0]
 	} else if host, _, e := net.SplitHostPort(address); e != nil {
@@ -63,22 +83,27 @@ func NewPool(address string, count int, auth smtp.Auth, opt_tlsConfig ...*tls.Co
 	return
 }
 
-// go1.1 didn't have this method
 func (c *client) Close() error {
 	return c.Text.Close()
 }
 
+// get the idle client
 func (p *Pool) get(timeout time.Duration) *client {
+	p.logger.Debug().Int("created", p.created).Int("max", p.max).Msgf("try to get the idle client")
+
+	// get the client immediately
 	select {
 	case c := <-p.clients:
 		return c
 	default:
 	}
 
+	// if there is no enough client in the pool, make the new one (spawn the goroutine to make one)
 	if p.created < p.max {
-		p.makeOne()
+		go p.makeOne(buildConnectionTimeout)
 	}
 
+	// set up the timeout
 	var deadline <-chan time.Time
 	if timeout >= 0 {
 		deadline = time.After(timeout)
@@ -89,8 +114,9 @@ func (p *Pool) get(timeout time.Duration) *client {
 		case c := <-p.clients:
 			return c
 		case <-p.rebuild:
-			p.makeOne()
+			go p.makeOne(buildConnectionTimeout)
 		case <-deadline:
+			p.logger.Error().Msgf("failed to get the idle client")
 			return nil
 		case <-p.closing:
 			return nil
@@ -158,17 +184,20 @@ func (p *Pool) dec() {
 	}
 }
 
-func (p *Pool) makeOne() {
-	go func() {
-		if p.inc() {
-			if c, err := p.build(); err == nil {
-				p.clients <- c
-			} else {
-				p.lastBuildErr = &timestampedErr{err, time.Now()}
-				p.dec()
-			}
+func (p *Pool) makeOne(timeout time.Duration) {
+	if p.inc() {
+		p.logger.Info().Str("addr", p.addr).Msg("build a new client")
+
+		c, err:= p.build(timeout)
+		if err != nil {
+			p.logger.Err(err).Msg("failed to build a new client")
+			p.lastBuildErr = &timestampedErr{err, time.Now()}
+			p.dec()
+			return
 		}
-	}()
+		p.logger.Info().Int("created", p.created).Int("max", p.max).Msg("create the new client successfully")
+		p.clients <- c
+	}
 }
 
 func startTLS(c *client, t *tls.Config) (bool, error) {
@@ -195,8 +224,14 @@ func addAuth(c *client, auth smtp.Auth) (bool, error) {
 	return true, nil
 }
 
-func (p *Pool) build() (*client, error) {
-	cl, err := smtp.Dial(p.addr)
+func (p *Pool) build(timeout time.Duration) (*client, error) {
+	conn, err := net.DialTimeout("tcp", p.addr, timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	host := strings.Split(p.addr, ":")[0]
+	cl, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return nil, err
 	}
@@ -299,27 +334,27 @@ func (p *Pool) SendRawMsg(from string, recipients []string, msg []byte, timeout 
 	}()
 
 	if err = c.Mail(from); err != nil {
-		return
+		return err
 	}
 
 	for _, recip := range recipients {
 		if err = c.Rcpt(recip); err != nil {
-			return
+			return err
 		}
 	}
 
 	w, err := c.Data()
 	if err != nil {
-		return
+		return err
 	}
 
 	if _, err = w.Write(msg); err != nil {
-		return
+		return err
 	}
 
 	err = w.Close()
 
-	return
+	return err
 }
 
 func emailOnly(full string) (string, error) {
