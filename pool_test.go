@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"net"
 	"net/smtp"
 	"net/textproto"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,7 +120,7 @@ QUIT
 
 }
 
-func TestPool_Sureview(t *testing.T) {
+func testPool_Sureview(t *testing.T) {
 	// https://testmydevice.sureviewsystems.com/Alarms?ID=490
 	poolSize := 10
 	auth := unencryptedAuth{
@@ -132,7 +132,6 @@ func TestPool_Sureview(t *testing.T) {
 		poolSize,
 		auth,
 	)
-
 
 	timeout := 3 * time.Second
 	done := make(chan struct{}, 6)
